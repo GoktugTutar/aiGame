@@ -16,7 +16,7 @@ const int DEPTH_LIMIT = 3;  // Minimax depth limit
 
 int turns = 1;       // Number of turns played
 
-// DUZELTME 1: Skorlar devasa yapildi (Heuristic ile karismasin diye)
+// FIX 1: Scores are set to massive values to ensure Heuristics never override them.
 const int WIN_SCORE  = 1000000000;
 const int LOSE_SCORE = -1000000000;
 
@@ -309,25 +309,25 @@ const double MAX_POSITIONAL_ABS   = 22.0;
 const double MAX_LOCAL_SPACE_DIFF = 24.0;
 
 //==================================================
-// DUZELTME 2: eval fonksiyonuna 'depth' parametresi eklendi
+// FIX 2: Added 'depth' parameter to eval function
 //==================================================
 int eval(const State& s, int depth) {
     
-    // 1) Terminal state: Kazanma/Kaybetme kontrolu
+    // 1) Terminal state: Win/Loss check
     if (hasNoMoves(s)) {
         if (s.isMaxTurn) {
-            // AI hamle yapamiyor -> KAYBETTI
-            // Oyunu olabildigince uzatmak istedigi icin -depth
+            // AI cannot move -> LOST
+            // Subtract depth to try and prolong the game (delaying the loss)
             return LOSE_SCORE - depth;
         } else {
-            // Insan hamle yapamiyor -> AI KAZANDI
-            // Oyunu HEMEN bitirmek istedigi icin +depth
-            // depth ne kadar buyukse (oyunun basi), puan o kadar yuksek olur.
+            // Human cannot move -> AI WON
+            // Add depth to prefer winning IMMEDIATELY.
+            // The larger the depth (closer to current turn), the higher the score.
             return WIN_SCORE + depth;
         }
     }
 
-    // 2) Heuristic hesaplamalar (Oyun devam ediyorsa)
+    // 2) Heuristic calculations (If game continues)
     int blockedApprox = 2 * turns - 1;
 
     int a = calculateMobility(s);
@@ -358,8 +358,8 @@ int eval(const State& s, int depth) {
         score = 5.0 * na + 2.0 * nb + 7.0 * nc + 3.0 * nd + 10.0 * ne;
     }
 
-    // DUZELTME 3: Çarpan küçültüldü (100.000 yerine 1.000)
-    // Boylece bu puan asla WIN_SCORE'a ulasamaz.
+    // FIX 3: Multiplier reduced (from 100,000 to 1,000)
+    // This ensures the Heuristic score never reaches the WIN_SCORE.
     return static_cast<int>(score * 1000.0);
 }
 
@@ -389,18 +389,18 @@ vector<Move> generateAllMoves(const State& s) {
 }
 
 //==================================================
-// DUZELTME 4: Minimax artik depth'i eval'e tasiyor
+// FIX 4: Minimax now passes 'depth' to eval
 //==================================================
 int minimax(const State& s, int depth, int alpha, int beta) {
     if (depth == 0 || hasNoMoves(s)) {
-        return eval(s, depth); // depth parametresi gonderiliyor
+        return eval(s, depth); // Passing depth parameter
     }
 
     auto moves = generateAllMoves(s);
     if (moves.empty()) return eval(s, depth);
 
     if (s.isMaxTurn) {
-        int best = -2000000000; // LOSE_SCORE'dan bile dusuk baslangic
+        int best = -2000000000; // Start lower than LOSE_SCORE
 
         for (const auto& m : moves) {
             State child = applyMove(s, m);
@@ -413,7 +413,7 @@ int minimax(const State& s, int depth, int alpha, int beta) {
         return best;
     } 
     else {
-        int best = 2000000000; // WIN_SCORE'dan bile yuksek baslangic
+        int best = 2000000000; // Start higher than WIN_SCORE
 
         for (const auto& m : moves) {
             State child = applyMove(s, m);
@@ -430,7 +430,7 @@ int minimax(const State& s, int depth, int alpha, int beta) {
 Move findBestMove(const State& s, int depth) {
     auto moves = generateAllMoves(s);
     Move best{};
-    int bestVal = -2000000000; // Cok dusuk bir degerle basla
+    int bestVal = -2000000000; // Start with a very low value
 
     int alpha = -2000000000;
     int beta  =  2000000000;
