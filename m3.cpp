@@ -16,8 +16,9 @@ const int DEPTH_LIMIT = 3;  // Minimax depth limit
 
 int turns = 1;       // Number of turns played
 
-const int WIN_SCORE  = 10000000;
-const int LOSE_SCORE = -10000000;
+// DUZELTME 1: Skorlar devasa yapildi (Heuristic ile karismasin diye)
+const int WIN_SCORE  = 1000000000;
+const int LOSE_SCORE = -1000000000;
 
 enum Cell {
     EMPTY   = 0,
@@ -146,10 +147,8 @@ int countMovesForPlayer(const State& s, bool forAI) {
 
 // a_n: Mobility Difference
 int calculateMobility(const State& s) {
-    // true: AI (Max), false: Human (Min)
     int aiM = countMovesForPlayer(s, true);
     int huM = countMovesForPlayer(s, false);
-
     return (aiM - huM);
 }
 
@@ -189,15 +188,11 @@ int calculateBarriers(const State& s) {
             }
         }
     }
-
-    // Strategy: more blocks around Human is good, around AI is bad
     return (blockedAroundHU - blockedAroundAI);
 }
 
-// c_n: Voronoi Territory (long-term spatial advantage)
-// For each cell, whoever can reach it in fewer steps "owns" it.
+// c_n: Voronoi Territory
 void bfsDistances(const State& s, int startX, int startY, int distMap[N][N]) {
-    // Initialize all distances to "infinity"
     for (int i = 0; i < N; ++i)
         for (int j = 0; j < N; ++j)
             distMap[i][j] = 999;
@@ -238,84 +233,57 @@ int calculateVoronoi(const State& s) {
     for (int i = 0; i < N; ++i) {
         for (int j = 0; j < N; ++j) {
             if (s.board[i][j] == BLOCKED) continue;
-
-            // unreachable for both -> ignore
             if (distAI[i][j] == 999 && distHU[i][j] == 999) continue;
 
             if (distAI[i][j] < distHU[i][j]) {
-                score++;    // AI controls this cell
+                score++;
             } else if (distHU[i][j] < distAI[i][j]) {
-                score--;    // Human controls this cell
+                score--;
             }
-            // equal distance -> neutral
         }
     }
-
     return score;
 }
 
-// d_n: Positional score (center control + edge penalty)
+// d_n: Positional score
 int calculatePositional(const State& s) {
-    // Board center (for N=7 -> mid = 3)
     int mid = (N - 1) / 2;
-
-    // Manhattan distance to center
     int aiDist = std::abs(s.aiX - mid) + std::abs(s.aiY - mid);
     int huDist = std::abs(s.huX - mid) + std::abs(s.huY - mid);
 
-    // If AI is closer to the center than Human, (huDist - aiDist) > 0 → good
     int centerWeight = 3;
     int centerScore = centerWeight * (huDist - aiDist);
 
-    // Simple edge penalty
     auto edgePenalty = [&](int x, int y) {
-        if (x == 0 || x == N - 1 || y == 0 || y == N - 1)
-            return 1;   // on the edge
+        if (x == 0 || x == N - 1 || y == 0 || y == N - 1) return 1;
         return 0;
     };
 
     int aiEdge = edgePenalty(s.aiX, s.aiY);
     int huEdge = edgePenalty(s.huX, s.huY);
-
-    // Being on the edge is bad for AI:
-    //   human-on-edge => good for AI (+)
-    //   AI-on-edge    => bad for AI (-)
     int edgeWeight = 4;
     int edgeScore = edgeWeight * (huEdge - aiEdge);
 
     return centerScore + edgeScore;
 }
 
-// Count how many empty / non-blocked cells are reachable from (sx, sy)
-// within at most 'maxDist' steps (local area around a pawn).
+// e_n: Local space
 int countLocalSpaceAround(const State& s, int sx, int sy, int maxDist) {
     bool visited[N][N] = { false };
-
-    struct Node {
-        int x, y, dist;
-    };
-
+    struct Node { int x, y, dist; };
     std::vector<Node> q;
     q.push_back({sx, sy, 0});
     visited[sx][sy] = true;
-
     int count = 0;
 
     for (size_t i = 0; i < q.size(); ++i) {
         auto [x, y, dist] = q[i];
-
-        // do not count the starting cell itself
-        if (!(x == sx && y == sy)) {
-            count++;
-        }
-
-        // stop expanding if we reached max distance
+        if (!(x == sx && y == sy)) count++;
         if (dist == maxDist) continue;
 
         for (int k = 0; k < 8; ++k) {
             int nx = x + dx[k];
             int ny = y + dy[k];
-
             if (!inBounds(nx, ny)) continue;
             if (visited[nx][ny])  continue;
             if (s.board[nx][ny] == BLOCKED) continue;
@@ -324,43 +292,48 @@ int countLocalSpaceAround(const State& s, int sx, int sy, int maxDist) {
             q.push_back({nx, ny, dist + 1});
         }
     }
-
     return count;
 }
 
-// e_n: Local space around each pawn (AI - Human)
 int calculateLocalSpace(const State& s) {
-    int maxDist = 2; // radius: 2 moves away (you can tweak this)
-
+    int maxDist = 2;
     int aiSpace = countLocalSpaceAround(s, s.aiX, s.aiY, maxDist);
     int huSpace = countLocalSpaceAround(s, s.huX, s.huY, maxDist);
-
-    return aiSpace - huSpace;  // positive => AI has more local space
+    return aiSpace - huSpace;
 }
 
+const double MAX_MOBILITY_DIFF    = 8.0;
+const double MAX_BARRIER_DIFF     = 8.0;
+const double MAX_VORONOI_DIFF     = 49.0;
+const double MAX_POSITIONAL_ABS   = 22.0;
+const double MAX_LOCAL_SPACE_DIFF = 24.0;
 
-// You can put these at the top of the file (near constants):
-const double MAX_MOBILITY_DIFF    = 8.0;   // ~[-8, +8]
-const double MAX_BARRIER_DIFF     = 8.0;   // ~[-8, +8]
-const double MAX_VORONOI_DIFF     = 49.0;  // ~[-49, +49]
-const double MAX_POSITIONAL_ABS   = 22.0;  // ~[-22, +22]
-const double MAX_LOCAL_SPACE_DIFF = 24.0;  // with radius=2, max ≈ 24 difference
-
-int eval(const State& s) {
-    // 1) Terminal state: no legal moves -> game over
+//==================================================
+// DUZELTME 2: eval fonksiyonuna 'depth' parametresi eklendi
+//==================================================
+int eval(const State& s, int depth) {
+    
+    // 1) Terminal state: Kazanma/Kaybetme kontrolu
     if (hasNoMoves(s)) {
-        return s.isMaxTurn ? LOSE_SCORE : WIN_SCORE;
+        if (s.isMaxTurn) {
+            // AI hamle yapamiyor -> KAYBETTI
+            // Oyunu olabildigince uzatmak istedigi icin -depth
+            return LOSE_SCORE - depth;
+        } else {
+            // Insan hamle yapamiyor -> AI KAZANDI
+            // Oyunu HEMEN bitirmek istedigi icin +depth
+            // depth ne kadar buyukse (oyunun basi), puan o kadar yuksek olur.
+            return WIN_SCORE + depth;
+        }
     }
 
-    // 2) Approximate number of blocked cells using the turn count
-    int blockedApprox = 2 * turns - 1;   // your formula
+    // 2) Heuristic hesaplamalar (Oyun devam ediyorsa)
+    int blockedApprox = 2 * turns - 1;
 
-    // 3) Raw heuristic components (always used)
-    int a = calculateMobility(s);        // mobility diff
-    int b = calculateBarriers(s);        // local blocks
-    int d = calculatePositional(s);      // center + edge
+    int a = calculateMobility(s);
+    int b = calculateBarriers(s);
+    int d = calculatePositional(s);
 
-    // 4) Normalize each component to roughly [-1, +1]
     auto clamp = [](double v) {
         if (v >  1.0) return  1.0;
         if (v < -1.0) return -1.0;
@@ -373,35 +346,22 @@ int eval(const State& s) {
 
     double score = 0.0;
 
-    // 5) Opening phase: FEWER THAN 5 BLOCKS -> NO VORONOI, NO LOCAL SPACE
     if (blockedApprox < 5) {
-        score =
-              4.0 * na   // mobility
-            + 2.0 * nb   // barriers
-            + 3.0 * nd;  // positional
+        score = 4.0 * na + 2.0 * nb + 3.0 * nd;
+    } 
+    else {
+        int c = calculateVoronoi(s);
+        int e = calculateLocalSpace(s);
+        double nc = clamp(static_cast<double>(c) / MAX_VORONOI_DIFF);
+        double ne = clamp(static_cast<double>(e) / MAX_LOCAL_SPACE_DIFF);
 
-        return static_cast<int>(score * 100000.0);
+        score = 5.0 * na + 2.0 * nb + 7.0 * nc + 3.0 * nd + 10.0 * ne;
     }
 
-    // 6) Mid / Late game: 3 OR MORE BLOCKS -> ADD VORONOI + LOCAL SPACE
-    int c = calculateVoronoi(s);         // territory control
-    int e = calculateLocalSpace(s);      // NEW: local free area
-
-    double nc = clamp(static_cast<double>(c) / MAX_VORONOI_DIFF);
-    double ne = clamp(static_cast<double>(e) / MAX_LOCAL_SPACE_DIFF);
-
-    score =
-          5.0 * na   // mobility
-        + 2.0 * nb   // barriers
-        + 7.0 * nc   // voronoi
-        + 3.0 * nd   // positional
-        + 10.0 * ne;  // local space (ONLY after 3 blocks)
-
-    return static_cast<int>(score * 100000.0);
+    // DUZELTME 3: Çarpan küçültüldü (100.000 yerine 1.000)
+    // Boylece bu puan asla WIN_SCORE'a ulasamaz.
+    return static_cast<int>(score * 1000.0);
 }
-
-
-
 
 
 //==================================================
@@ -413,7 +373,6 @@ vector<Move> generateAllMoves(const State& s) {
 
     for (auto p : steps) {
         int mx = p.first, my = p.second;
-
         State after = s;
         applyStepMove(after, mx, my);
 
@@ -426,25 +385,22 @@ vector<Move> generateAllMoves(const State& s) {
             }
         }
     }
-
     return res;
 }
 
 //==================================================
-// 6) Minimax (depth limited, with alpha-beta)
+// DUZELTME 4: Minimax artik depth'i eval'e tasiyor
 //==================================================
 int minimax(const State& s, int depth, int alpha, int beta) {
-    // Terminal or depth limit reached
     if (depth == 0 || hasNoMoves(s)) {
-        return eval(s);
+        return eval(s, depth); // depth parametresi gonderiliyor
     }
 
     auto moves = generateAllMoves(s);
-    if (moves.empty()) return eval(s);
+    if (moves.empty()) return eval(s, depth);
 
     if (s.isMaxTurn) {
-        // MAX player (AI)
-        int best = -1000000000;
+        int best = -2000000000; // LOSE_SCORE'dan bile dusuk baslangic
 
         for (const auto& m : moves) {
             State child = applyMove(s, m);
@@ -452,18 +408,12 @@ int minimax(const State& s, int depth, int alpha, int beta) {
 
             best = max(best, val);
             alpha = max(alpha, val);
-
-            // Pruning
-            if (beta <= alpha)
-                break;
+            if (beta <= alpha) break;
         }
-
         return best;
     } 
-    
     else {
-        // MIN player (Human)
-        int best = 1000000000;
+        int best = 2000000000; // WIN_SCORE'dan bile yuksek baslangic
 
         for (const auto& m : moves) {
             State child = applyMove(s, m);
@@ -471,12 +421,8 @@ int minimax(const State& s, int depth, int alpha, int beta) {
 
             best = min(best, val);
             beta = min(beta, val);
-
-            // Pruning
-            if (beta <= alpha)
-                break;
+            if (beta <= alpha) break;
         }
-
         return best;
     }
 }
@@ -484,10 +430,10 @@ int minimax(const State& s, int depth, int alpha, int beta) {
 Move findBestMove(const State& s, int depth) {
     auto moves = generateAllMoves(s);
     Move best{};
-    int bestVal = -1000000000;
+    int bestVal = -2000000000; // Cok dusuk bir degerle basla
 
-    int alpha = -1000000000;
-    int beta  =  1000000000;
+    int alpha = -2000000000;
+    int beta  =  2000000000;
 
     for (const auto& m : moves) {
         State child = applyMove(s, m);
@@ -497,16 +443,14 @@ Move findBestMove(const State& s, int depth) {
             bestVal = val;
             best = m;
         }
-
         alpha = max(alpha, val);
     }
-
     return best;
 }
 
 
 //==================================================
-// 5) initializeGame
+// Initialize Game
 //==================================================
 void initializeGame(State& s) {
     for (int i = 0; i < N; i++)
@@ -519,7 +463,7 @@ void initializeGame(State& s) {
     s.board[s.aiX][s.aiY] = AI_PAWN;
     s.board[s.huX][s.huY] = HU_PAWN;
 
-    s.isMaxTurn = false;  // Human starts
+    s.isMaxTurn = false;
 }
 
 //==================================================
@@ -557,11 +501,7 @@ int main() {
         "AI Minimax Game"
     );
 
-    // ---------------------------------------------------------
-    // LOAD FONT
-    // ---------------------------------------------------------
     sf::Font font;
-    // Try macOS system font or local file
     if (!font.openFromFile("arial.ttf")) {
         if (!font.openFromFile("/Library/Fonts/Arial.ttf")) {
             std::cout << "Warning: Font not found, text will not be visible.\n";
@@ -576,29 +516,19 @@ int main() {
     initializeGame(game);
 
     int depthLimit = DEPTH_LIMIT;
-
-    // Human move stage:
-    // hStage = 0 -> first select the tile to move to
-    // hStage = 1 -> then select the tile to place barrier
     int hStage = 0;
 
     while (window.isOpen()) {
-
-        // ==========================================================
-        // 1. INPUT: User Clicks
-        // ==========================================================
         while (const std::optional<sf::Event> event = window.pollEvent()) {
             if (event->is<sf::Event::Closed>()) {
                 window.close();
             }
 
-            // Listen for clicks only if it's HUMAN's turn
             if (!game.isMaxTurn) {
                 if (const auto* mousePressed = event->getIf<sf::Event::MouseButtonPressed>()) {
                     int mx = mousePressed->position.x;
                     int my = mousePressed->position.y;
 
-                    // Ignore if clicked on text area or outside
                     if (my >= N * CELL) continue;
 
                     int gx = my / CELL;
@@ -606,7 +536,6 @@ int main() {
                     if (!inBounds(gx, gy)) continue;
 
                     if (hStage == 0) {
-                        // --- MOVE SELECTION ---
                         auto steps = getLegalStepMoves(game);
                         bool ok = false;
                         for (auto p : steps) {
@@ -617,28 +546,21 @@ int main() {
                         }
                         if (ok) {
                             applyStepMove(game, gx, gy);
-                            hStage = 1; // Now switch to barrier placement stage
+                            hStage = 1; 
                         }
                     }
                     else if (hStage == 1) {
-                        // --- BARRIER SELECTION ---
                         if (game.board[gx][gy] == EMPTY) {
                             placeBarrier(game, gx, gy);
-                            game.isMaxTurn = true; // Turn switches to AI
-                            hStage = 0;            // Reset stage for Human's next turn
+                            game.isMaxTurn = true;
+                            hStage = 0;            
                         }
                     }
                 }
             }
         }
 
-        // ==========================================================
-        // 2. UPDATE: Game Logic and AI
-        // ==========================================================
-
-        // A) Is Game Over?
         if (hasNoMoves(game)) {
-            // Draw final state and end
             window.clear();
             drawBoard(window, game);
             
@@ -658,32 +580,23 @@ int main() {
             break;
         }
 
-        // B) AI Logic (FIXED PART HERE)
         if (window.isOpen() && game.isMaxTurn) {
-            
-            // 1. Inform user
             if (font.getInfo().family != "") {
                 infoText.setString("AI is thinking...");
             }
-
-            // 2. FORCE UPDATE SCREEN (To see the barrier)
             window.clear();
-            drawBoard(window, game);     // Draw current board (with barrier)
+            drawBoard(window, game);
             if (font.getInfo().family != "")
                 window.draw(infoText);
-            window.display();            // Push to screen
-
-            // 3. LET OS BREATHE (To push drawing to screen)
+            window.display();
             sf::sleep(sf::milliseconds(100));
 
-            // 4. DO HEAVY CALCULATION
             Move ai = findBestMove(game, depthLimit);
             game = applyMove(game, ai);
             turns++;
-            cout << turns << endl;
+            cout << "Turns: " << turns << endl;
         }
 
-        // C) Human Turn Text Update
         if (!game.isMaxTurn && font.getInfo().family != "") {
             if (hStage == 0)
                 infoText.setString("Your turn: Move your pawn.");
@@ -691,9 +604,6 @@ int main() {
                 infoText.setString("Your turn: Place a barrier.");
         }
 
-        // ==========================================================
-        // 3. RENDER: Standard Drawing Loop
-        // ==========================================================
         window.clear();
         drawBoard(window, game);
         if (font.getInfo().family != "")
