@@ -14,6 +14,8 @@ const int CELL = 80;        // Pixel size of each cell
 const int UI_HEIGHT = 40;   // Extra space at bottom for text
 const int DEPTH_LIMIT = 3;  // Minimax depth limit
 
+int turns = 1;       // Number of turns played
+
 const int WIN_SCORE  = 1000000;
 const int LOSE_SCORE = -1000000;
 
@@ -139,31 +141,29 @@ int countMovesForPlayer(const State& s, bool forAI) {
 }
 
 //==================================================
-// 3) h(n) / eval function  ---> h = a_n + b_n + c_n
-//    a_n = mobility contribution
-//    b_n = barrier effect
-//    c_n = reachable area (long-term space advantage)
+//  h(n) / eval function  ---> h = a_n + b_n + c_n + d_n
 //==================================================
 
 // a_n: Mobility Difference
 int calculateMobility(const State& s) {
-    // true: AI (Max), false: Human (Min) varsayımı ile
+    // true: AI (Max), false: Human (Min)
     int aiM = countMovesForPlayer(s, true);
     int huM = countMovesForPlayer(s, false);
 
     return (aiM - huM);
 }
+
 // b_n: Barrier Effect
 int calculateBarriers(const State& s) {
     int blockedAroundAI = 0;
     int blockedAroundHU = 0;
 
-    // --- AI (Max) etrafındaki engeller ---
+    // --- Blocks around AI (Max) ---
     {
         State temp = s;
-        temp.isMaxTurn = true; 
+        temp.isMaxTurn = true;
         int ax, ay;
-        getCurrentPlayerPos(temp, ax, ay); // AI pozisyonunu al
+        getCurrentPlayerPos(temp, ax, ay);
 
         for (int k = 0; k < 8; k++) {
             int nx = ax + dx[k];
@@ -174,12 +174,12 @@ int calculateBarriers(const State& s) {
         }
     }
 
-    // --- Human (Min) etrafındaki engeller ---
+    // --- Blocks around Human (Min) ---
     {
         State temp = s;
         temp.isMaxTurn = false;
         int hx, hy;
-        getCurrentPlayerPos(temp, hx, hy); // Human pozisyonunu al
+        getCurrentPlayerPos(temp, hx, hy);
 
         for (int k = 0; k < 8; k++) {
             int nx = hx + dx[k];
@@ -190,66 +190,218 @@ int calculateBarriers(const State& s) {
         }
     }
 
-    // Strateji: Rakibin etrafı kapalıysa iyi (+), bizim etrafımız kapalıysa kötü (-)
+    // Strategy: more blocks around Human is good, around AI is bad
     return (blockedAroundHU - blockedAroundAI);
 }
-// c_n: Reachable Area (long-term spatial advantage)
-// AI reachable cells - Human reachable cells
-int countReachable(const State& s, bool forAI) {
-    int sx = forAI ? s.aiX : s.huX;
-    int sy = forAI ? s.aiY : s.huY;
 
-    int otherX = forAI ? s.huX : s.aiX;
-    int otherY = forAI ? s.huY : s.aiY;
+// c_n: Voronoi Territory (long-term spatial advantage)
+// For each cell, whoever can reach it in fewer steps "owns" it.
+void bfsDistances(const State& s, int startX, int startY, int distMap[N][N]) {
+    // Initialize all distances to "infinity"
+    for (int i = 0; i < N; ++i)
+        for (int j = 0; j < N; ++j)
+            distMap[i][j] = 999;
 
-    bool visited[N][N] = { false };
     std::vector<std::pair<int,int>> q;
+    q.push_back({startX, startY});
+    distMap[startX][startY] = 0;
 
-    q.push_back({sx, sy});
+    size_t head = 0;
+    while (head < q.size()) {
+        auto [cx, cy] = q[head++];
+        int currentDist = distMap[cx][cy];
+
+        for (int k = 0; k < 8; ++k) {
+            int nx = cx + dx[k];
+            int ny = cy + dy[k];
+
+            if (!inBounds(nx, ny)) continue;
+            if (s.board[nx][ny] == BLOCKED) continue;
+
+            if (distMap[nx][ny] > currentDist + 1) {
+                distMap[nx][ny] = currentDist + 1;
+                q.push_back({nx, ny});
+            }
+        }
+    }
+}
+
+int calculateVoronoi(const State& s) {
+    int distAI[N][N];
+    int distHU[N][N];
+
+    bfsDistances(s, s.aiX, s.aiY, distAI);
+    bfsDistances(s, s.huX, s.huY, distHU);
+
+    int score = 0;
+
+    for (int i = 0; i < N; ++i) {
+        for (int j = 0; j < N; ++j) {
+            if (s.board[i][j] == BLOCKED) continue;
+
+            // unreachable for both -> ignore
+            if (distAI[i][j] == 999 && distHU[i][j] == 999) continue;
+
+            if (distAI[i][j] < distHU[i][j]) {
+                score++;    // AI controls this cell
+            } else if (distHU[i][j] < distAI[i][j]) {
+                score--;    // Human controls this cell
+            }
+            // equal distance -> neutral
+        }
+    }
+
+    return score;
+}
+
+// d_n: Positional score (center control + edge penalty)
+int calculatePositional(const State& s) {
+    // Board center (for N=7 -> mid = 3)
+    int mid = (N - 1) / 2;
+
+    // Manhattan distance to center
+    int aiDist = std::abs(s.aiX - mid) + std::abs(s.aiY - mid);
+    int huDist = std::abs(s.huX - mid) + std::abs(s.huY - mid);
+
+    // If AI is closer to the center than Human, (huDist - aiDist) > 0 → good
+    int centerWeight = 3;
+    int centerScore = centerWeight * (huDist - aiDist);
+
+    // Simple edge penalty
+    auto edgePenalty = [&](int x, int y) {
+        if (x == 0 || x == N - 1 || y == 0 || y == N - 1)
+            return 1;   // on the edge
+        return 0;
+    };
+
+    int aiEdge = edgePenalty(s.aiX, s.aiY);
+    int huEdge = edgePenalty(s.huX, s.huY);
+
+    // Being on the edge is bad for AI:
+    //   human-on-edge => good for AI (+)
+    //   AI-on-edge    => bad for AI (-)
+    int edgeWeight = 4;
+    int edgeScore = edgeWeight * (huEdge - aiEdge);
+
+    return centerScore + edgeScore;
+}
+
+// Count how many empty / non-blocked cells are reachable from (sx, sy)
+// within at most 'maxDist' steps (local area around a pawn).
+int countLocalSpaceAround(const State& s, int sx, int sy, int maxDist) {
+    bool visited[N][N] = { false };
+
+    struct Node {
+        int x, y, dist;
+    };
+
+    std::vector<Node> q;
+    q.push_back({sx, sy, 0});
     visited[sx][sy] = true;
 
-    int reachableCount = 0;
+    int count = 0;
 
-    for (size_t qi = 0; qi < q.size(); ++qi) {
-        auto [x, y] = q[qi];
-        reachableCount++;
+    for (size_t i = 0; i < q.size(); ++i) {
+        auto [x, y, dist] = q[i];
+
+        // do not count the starting cell itself
+        if (!(x == sx && y == sy)) {
+            count++;
+        }
+
+        // stop expanding if we reached max distance
+        if (dist == maxDist) continue;
 
         for (int k = 0; k < 8; ++k) {
             int nx = x + dx[k];
             int ny = y + dy[k];
 
             if (!inBounds(nx, ny)) continue;
-            if (visited[nx][ny]) continue;
-
+            if (visited[nx][ny])  continue;
             if (s.board[nx][ny] == BLOCKED) continue;
-            if (nx == otherX && ny == otherY) continue;
 
             visited[nx][ny] = true;
-            q.push_back({nx, ny});
+            q.push_back({nx, ny, dist + 1});
         }
     }
 
-    return reachableCount;
+    return count;
 }
-int calculateAreaControl(const State& s) {
-    int aiArea = countReachable(s, true);
-    int huArea = countReachable(s, false);
 
-    return (aiArea - huArea);
+// e_n: Local space around each pawn (AI - Human)
+int calculateLocalSpace(const State& s) {
+    int maxDist = 2; // radius: 2 moves away (you can tweak this)
+
+    int aiSpace = countLocalSpaceAround(s, s.aiX, s.aiY, maxDist);
+    int huSpace = countLocalSpaceAround(s, s.huX, s.huY, maxDist);
+
+    return aiSpace - huSpace;  // positive => AI has more local space
 }
+
+
+// You can put these at the top of the file (near constants):
+const double MAX_MOBILITY_DIFF    = 8.0;   // ~[-8, +8]
+const double MAX_BARRIER_DIFF     = 8.0;   // ~[-8, +8]
+const double MAX_VORONOI_DIFF     = 49.0;  // ~[-49, +49]
+const double MAX_POSITIONAL_ABS   = 22.0;  // ~[-22, +22]
+const double MAX_LOCAL_SPACE_DIFF = 24.0;  // with radius=2, max ≈ 24 difference
 
 int eval(const State& s) {
-    // Terminal state: if the current player has no legal moves, the game ends
+    // 1) Terminal state: no legal moves -> game over
     if (hasNoMoves(s)) {
         return s.isMaxTurn ? LOSE_SCORE : WIN_SCORE;
     }
 
-    int a = calculateMobility(s) * 5; // weight = 10
-    int b = calculateBarriers(s) * 2; // weight = 2
-    int c = calculateAreaControl(s) * 10; // weight = 5
+    // 2) Approximate number of blocked cells using the turn count
+    int blockedApprox = 2 * turns - 1;   // your formula
 
-    return a + b + c;
+    // 3) Raw heuristic components (always used)
+    int a = calculateMobility(s);        // mobility diff
+    int b = calculateBarriers(s);        // local blocks
+    int d = calculatePositional(s);      // center + edge
+
+    // 4) Normalize each component to roughly [-1, +1]
+    auto clamp = [](double v) {
+        if (v >  1.0) return  1.0;
+        if (v < -1.0) return -1.0;
+        return v;
+    };
+
+    double na = clamp(static_cast<double>(a) / MAX_MOBILITY_DIFF);
+    double nb = clamp(static_cast<double>(b) / MAX_BARRIER_DIFF);
+    double nd = clamp(static_cast<double>(d) / MAX_POSITIONAL_ABS);
+
+    double score = 0.0;
+
+    // 5) Opening phase: FEWER THAN 5 BLOCKS -> NO VORONOI, NO LOCAL SPACE
+    if (blockedApprox < 5) {
+        score =
+              4.0 * na   // mobility
+            + 2.0 * nb   // barriers
+            + 3.0 * nd;  // positional
+
+        return static_cast<int>(score * 100000.0);
+    }
+
+    // 6) Mid / Late game: 3 OR MORE BLOCKS -> ADD VORONOI + LOCAL SPACE
+    int c = calculateVoronoi(s);         // territory control
+    int e = calculateLocalSpace(s);      // NEW: local free area
+
+    double nc = clamp(static_cast<double>(c) / MAX_VORONOI_DIFF);
+    double ne = clamp(static_cast<double>(e) / MAX_LOCAL_SPACE_DIFF);
+
+    score =
+          5.0 * na   // mobility
+        + 2.0 * nb   // barriers
+        + 8.0 * nc   // voronoi
+        + 3.0 * nd   // positional
+        + 9.0 * ne;  // local space (ONLY after 3 blocks)
+
+    return static_cast<int>(score * 100000.0);
 }
+
+
+
 
 
 //==================================================
@@ -527,6 +679,8 @@ int main() {
             // 4. DO HEAVY CALCULATION
             Move ai = findBestMove(game, depthLimit);
             game = applyMove(game, ai);
+            turns++;
+            cout << turns << endl;
         }
 
         // C) Human Turn Text Update
