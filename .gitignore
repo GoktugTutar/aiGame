@@ -1,0 +1,6 @@
+.DS_Store
+# Ignore compiled binary
+/game
+/treeV/game_data.js
+/treeV/tree
+/.vscode

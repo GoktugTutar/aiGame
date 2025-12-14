@@ -1,0 +1,45 @@
+------ to compile it
+
+g++ -std=c++17 m2.cpp -o game \
+-I/opt/homebrew/include \
+-L/opt/homebrew/lib \
+-lsfml-graphics -lsfml-window -lsfml-system
+
+
+
+g++ -std=c++20 tree.cpp -o tree \
+-I/opt/homebrew/include \
+-L/opt/homebrew/lib \
+-lsfml-graphics -lsfml-window -lsfml-system
+./tree
+
+## 🧠 AI & Heuristic Evaluation Logic
+
+The Artificial Intelligence in this game uses the **Minimax Algorithm** enhanced with **Alpha-Beta Pruning** to determine the optimal move. To evaluate game states beyond the calculation depth, a comprehensive **Heuristic Evaluation Function** ($h(n)$) is used.
+
+The AI prioritizes **early victories** by adding the search `depth` to the winning score, ensuring it chooses the fastest path to checkmate the opponent.
+
+### Heuristic Components (Weights & Definitions)
+
+The evaluation function is a linear combination of five strategic components:  
+`Score = (5 * a) + (2 * b) + (10 * c) + (4 * d) + (8 * e)`
+
+#### **a. Mobility ($w=5.0$)**
+* **Definition:** The difference between the number of legal moves available to the AI vs. the Human.
+* **Purpose:** Ensures the AI always maintains a high degree of freedom while trying to restrict the opponent's movement options.
+
+#### **b. Barrier Proximity ($w=2.0$)**
+* **Definition:** Evaluates defensive and offensive barrier placements.
+* **Purpose:** Encourages the AI to place barriers near the opponent to restrict them, while keeping its own immediate surroundings clear of obstacles.
+
+#### **c. Voronoi Territory ($w=10.0$)**
+* **Definition:** Calculates "ownership" of the board cells based on distance. A cell "belongs" to the player who can reach it in fewer steps (BFS distance).
+* **Purpose:** This is the **primary strategic component**. It drives the AI to cut off the board and claim a larger portion of the map, effectively suffocating the opponent over time.
+
+#### **d. Positional / Center Control ($w=4.0$)**
+* **Definition:** Rewards standing near the center of the board and penalizes standing on the edges or corners.
+* **Purpose:** Prevents the AI from trapping itself in corners early in the game. Controlling the center provides maximum reachability to all other sectors.
+
+#### **e. Local Space ($w=8.0$)**
+* **Definition:** Calculates the number of reachable cells within a strictly limited radius (e.g., 2-3 steps) using BFS.
+* **Purpose:** Acts as a "breathing room" metric. Even if the AI loses long-term territory ($c$), this ensures it has enough immediate space to maneuver and avoid getting trapped instantly.
